@@ -131,9 +131,15 @@ def sanitize_folder(name):
     return name.strip() or "unnamed"
 
 
-def main():
-    excel_path = "C:/test/Otchet_Samocat.xlsx"
-    row_nums = list(range(21, 104))
+def main(excel_path=None, photos_path=None, row_nums=None):
+    excel_path = excel_path or os.environ.get('TEMP_EXCEL_PATH', "C:/test/Otchet_Samocat.xlsx")
+    photos_path = photos_path or os.environ.get('TEMP_PHOTOS_PATH', "C:/test/photos")
+    row_nums = row_nums or list(range(8, 104))
+    print(f"\n{'='*50}")
+    print(f"Starting download: rows {row_nums[0]}-{row_nums[-1]}")
+    print(f"Excel: {excel_path}")
+    print(f"Photos: {photos_path}")
+    print(f"{'='*50}\n")
 
     wb = openpyxl.load_workbook(excel_path)
     ws_excel = wb.active
@@ -171,7 +177,7 @@ def main():
             print(f"URL: {url}")
             print(f"Folder: {folder_name}/{city}")
 
-            output_folder = os.path.join("C:/test/photos", folder_name, city)
+            output_folder = os.path.join(photos_path, folder_name, city)
             os.makedirs(output_folder, exist_ok=True)
 
             navigate_and_wait(ws_cdp, url, wait_seconds=6)
