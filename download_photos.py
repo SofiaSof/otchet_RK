@@ -54,11 +54,13 @@ def navigate_and_wait(ws, url, wait_seconds=8):
                 break
 
 
-def find_photo_urls(ws):
+def find_photo_urls(ws, photo_type="all"):
     script = """
     (function() {
         var results = [];
         var seen = {};
+        var photoType = arguments[0];
+        
         document.querySelectorAll("img").forEach(function(img) {
             var src = img.src || "";
             var isPhoto = (
@@ -68,7 +70,19 @@ def find_photo_urls(ws):
                 src.includes("GetPosterContent") ||
                 (img.className && img.className.includes("thumbnail"))
             );
-            if (isPhoto && src && !src.includes(".svg") && !seen[src]) {
+            
+            var isStreetBanner = src.includes("GetPosterContent") || src.includes("CampaignGuaranteedPhotoReport");
+            var isStreet = img.alt && (img.alt.toLowerCase().includes("улиц") || img.alt.toLowerCase().includes("баннер"));
+            var isStreetContainer = img.closest && img.closest('[class*="street"], [class*="banner"], [class*="outdoor"]');
+            
+            var includePhoto = false;
+            if (photoType === "street_banner") {
+                includePhoto = isPhoto && (isStreetBanner || isStreet || isStreetContainer);
+            } else {
+                includePhoto = isPhoto;
+            }
+            
+            if (includePhoto && src && !src.includes(".svg") && !seen[src]) {
                 seen[src] = true;
                 results.push(src);
             }
@@ -77,7 +91,7 @@ def find_photo_urls(ws):
     })()
     """
     ws.send(json.dumps({"id": 10, "method": "Runtime.evaluate",
-                         "params": {"expression": script, "returnByValue": True}}))
+                         "params": {"expression": script, "returnByValue": True, "arguments": [{"value": photo_type}]}}))
     resp = json.loads(ws.recv())
     return json.loads(resp.get("result", {}).get("result", {}).get("value", "[]"))
 
@@ -96,12 +110,14 @@ def download_image(url, folder, session):
             elif "webp" in r.headers.get("content-type", "") or url.endswith(".webp"):
                 ext = ".webp"
 
-            name = url.split("/")[-1].split("?")[0]
-            name = re.sub(r'[<>:"/\\|?*]', '_', name)
-            if not name or "." not in name:
-                name = f"photo_{abs(hash(url))}{ext}"
-
-            filepath = os.path.join(folder, name)
+            base_name = "preview"
+            filepath = os.path.join(folder, f"{base_name}{ext}")
+            
+            counter = 1
+            while os.path.exists(filepath):
+                filepath = os.path.join(folder, f"{base_name}_{counter}{ext}")
+                counter += 1
+            
             with open(filepath, "wb") as f:
                 f.write(r.content)
             return filepath
@@ -116,57 +132,68 @@ def sanitize_folder(name):
 
 
 def main():
-    excel_path = "test/Otchet_Samocat.xlsx"
-    row_num = 8
+    excel_path = "C:/test/Otchet_Samocat.xlsx"
+    row_nums = list(range(21, 104))
 
     wb = openpyxl.load_workbook(excel_path)
     ws_excel = wb.active
 
-    folder_name = sanitize_folder(ws_excel.cell(row=row_num, column=11).value or "")
-    if not folder_name or folder_name == "unnamed":
-        print(f"Row {row_num}: column K is empty")
-        return
-
-    url = None
-    cell_s = ws_excel.cell(row=row_num, column=19)
-    if cell_s.hyperlink:
-        url = cell_s.hyperlink.target
-    if not url:
-        url = cell_s.value
-    if not url:
-        print(f"Row {row_num}: column S has no URL")
-        return
-
-    print(f"Row: {row_num}")
-    print(f"URL: {url}")
-    print(f"Folder: {folder_name}")
-
-    output_folder = os.path.join("test", "photos", folder_name)
-    os.makedirs(output_folder, exist_ok=True)
-
+    session = requests.Session()
     ws_cdp = None
     chrome_proc = None
-    session = requests.Session()
 
     try:
         ws_cdp, chrome_proc = get_page_target_ws()
-        navigate_and_wait(ws_cdp, url, wait_seconds=6)
-        photo_urls = find_photo_urls(ws_cdp)
 
-        print(f"\nFound {len(photo_urls)} photo(s):")
-        for u in photo_urls:
-            print(f"  {u}")
+        for row_num in row_nums:
+            print(f"\n{'='*50}")
+            print(f"Processing row {row_num}")
+            print('='*50)
 
-        downloaded = 0
-        for i, photo_url in enumerate(photo_urls, 1):
-            filepath = download_image(photo_url, output_folder, session)
-            if filepath:
-                print(f"  [{i}] Saved: {os.path.basename(filepath)} ({len(open(filepath,'rb').read())} bytes)")
-                downloaded += 1
-            else:
-                print(f"  [{i}] Failed: {photo_url}")
+            folder_name = sanitize_folder(ws_excel.cell(row=row_num, column=11).value or "")
+            city = sanitize_folder(ws_excel.cell(row=row_num, column=22).value or "")
+            if not folder_name or folder_name == "unnamed":
+                print(f"Row {row_num}: column K is empty")
+                continue
+            if not city or city == "unnamed":
+                city = "unknown"
 
-        print(f"\nDone. Downloaded {downloaded}/{len(photo_urls)} photos to:\n{output_folder}")
+            url = None
+            cell_s = ws_excel.cell(row=row_num, column=19)
+            if cell_s.hyperlink:
+                url = cell_s.hyperlink.target
+            if not url:
+                url = cell_s.value
+            if not url:
+                print(f"Row {row_num}: column S has no URL")
+                continue
+
+            print(f"URL: {url}")
+            print(f"Folder: {folder_name}/{city}")
+
+            output_folder = os.path.join("C:/test/photos", folder_name, city)
+            os.makedirs(output_folder, exist_ok=True)
+
+            navigate_and_wait(ws_cdp, url, wait_seconds=6)
+            photo_urls = find_photo_urls(ws_cdp, photo_type="street_banner")
+
+            print(f"\nFound {len(photo_urls)} photo(s):")
+            for u in photo_urls:
+                print(f"  {u}")
+
+            downloaded = 0
+            for i, photo_url in enumerate(photo_urls, 1):
+                if "preview" not in photo_url.lower():
+                    print(f"  [{i}] Skipped (not preview): {photo_url}")
+                    continue
+                filepath = download_image(photo_url, output_folder, session)
+                if filepath:
+                    print(f"  [{i}] Saved: {os.path.basename(filepath)} ({len(open(filepath,'rb').read())} bytes)")
+                    downloaded += 1
+                else:
+                    print(f"  [{i}] Failed: {photo_url}")
+
+            print(f"\nRow {row_num}: Downloaded {downloaded}/{len(photo_urls)} photos to:\n{output_folder}")
 
     finally:
         if ws_cdp:
